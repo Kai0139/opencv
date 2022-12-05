@@ -37,6 +37,7 @@
 #include "precomp.hpp"
 #include "opencl_kernels_features2d.hpp"
 #include <iterator>
+#include <iostream>
 
 #ifndef CV_IMPL_ADD
 #define CV_IMPL_ADD(x)
@@ -1119,7 +1120,7 @@ void ORB_Impl::detectAndCompute( InputArray _image, InputArray _mask,
     {
         if( useOCL )
             imagePyramid.copyTo(uimagePyramid);
-
+        std::cout << "imagePyramid rows: " << imagePyramid.rows << "imagePyramid cols: " << std::endl;
         // Get keypoints, those will be far enough from the border that no check will be required for the descriptor
         computeKeyPoints(imagePyramid, uimagePyramid, maskPyramid,
                          layerInfo, ulayerInfo, layerScale, keypoints,
@@ -1221,6 +1222,7 @@ Ptr<ORB> ORB::create(int nfeatures, float scaleFactor, int nlevels, int edgeThre
            int firstLevel, int wta_k, ORB::ScoreType scoreType, int patchSize, int fastThreshold)
 {
     CV_Assert(firstLevel >= 0);
+    std::cout << "created ORB detector" << std::endl;
     return makePtr<ORB_Impl>(nfeatures, scaleFactor, nlevels, edgeThreshold,
                              firstLevel, wta_k, scoreType, patchSize, fastThreshold);
 }
