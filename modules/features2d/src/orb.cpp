@@ -1120,7 +1120,7 @@ void ORB_Impl::detectAndCompute( InputArray _image, InputArray _mask,
     {
         if( useOCL )
             imagePyramid.copyTo(uimagePyramid);
-        std::cout << "imagePyramid rows: " << imagePyramid.rows << "imagePyramid cols: " << std::endl;
+        std::cout << "imagePyramid rows: " << imagePyramid.rows << " cols: " << imagePyramid.rows << std::endl;
         // Get keypoints, those will be far enough from the border that no check will be required for the descriptor
         computeKeyPoints(imagePyramid, uimagePyramid, maskPyramid,
                          layerInfo, ulayerInfo, layerScale, keypoints,
