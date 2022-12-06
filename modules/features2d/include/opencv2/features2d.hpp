@@ -193,6 +193,7 @@ public:
                           OutputArrayOfArrays descriptors );
 
     /** Detects keypoints and computes the descriptors */
+
     CV_WRAP virtual void detectAndCompute( InputArray image, InputArray mask,
                                            CV_OUT std::vector<KeyPoint>& keypoints,
                                            OutputArray descriptors,
@@ -455,6 +456,11 @@ public:
     CV_WRAP virtual void setFastThreshold(int fastThreshold) = 0;
     CV_WRAP virtual int getFastThreshold() const = 0;
     CV_WRAP virtual String getDefaultName() const CV_OVERRIDE;
+    
+    virtual void detectAndComputeORB( InputArray image, Mat &imagePyramid, InputArray mask,
+                              CV_OUT std::vector<KeyPoint>& keypoints,
+                              OutputArray descriptors,
+                              bool useProvidedKeypoints=false ) = 0;
 };
 
 /** @brief Maximally stable extremal region extractor

@@ -705,6 +705,11 @@ public:
     void detectAndCompute( InputArray image, InputArray mask, std::vector<KeyPoint>& keypoints,
                      OutputArray descriptors, bool useProvidedKeypoints=false ) CV_OVERRIDE;
 
+    void detectAndComputeORB( InputArray image, Mat &imagePyramid, InputArray mask,
+                              CV_OUT std::vector<KeyPoint>& keypoints,
+                              OutputArray descriptors,
+                              bool useProvidedKeypoints=false ) CV_OVERRIDE;
+
 protected:
 
     int nfeatures;
@@ -1028,7 +1033,259 @@ void ORB_Impl::detectAndCompute( InputArray _image, InputArray _mask,
     std::vector<Rect> layerInfo(nLevels);
     std::vector<int> layerOfs(nLevels);
     std::vector<float> layerScale(nLevels);
+
     Mat imagePyramid, maskPyramid;
+    UMat uimagePyramid, ulayerInfo;
+
+    float level0_inv_scale = 1.0f / getScale(0, firstLevel, scaleFactor);
+    size_t level0_width = (size_t)cvRound(image.cols * level0_inv_scale);
+    size_t level0_height = (size_t)cvRound(image.rows * level0_inv_scale);
+    Size bufSize((int)alignSize(level0_width + border*2, 16), 0);  // TODO change alignment to 64
+
+    int level_dy = (int)level0_height + border*2;
+    Point level_ofs(0, 0);
+
+    for( level = 0; level < nLevels; level++ )
+    {
+        float scale = getScale(level, firstLevel, scaleFactor);
+        layerScale[level] = scale;
+        float inv_scale = 1.0f / scale;
+        Size sz(cvRound(image.cols * inv_scale), cvRound(image.rows * inv_scale));
+        Size wholeSize(sz.width + border*2, sz.height + border*2);
+        if( level_ofs.x + wholeSize.width > bufSize.width )
+        {
+            level_ofs = Point(0, level_ofs.y + level_dy);
+            level_dy = wholeSize.height;
+        }
+
+        Rect linfo(level_ofs.x + border, level_ofs.y + border, sz.width, sz.height);
+        layerInfo[level] = linfo;
+        layerOfs[level] = linfo.y*bufSize.width + linfo.x;
+        level_ofs.x += wholeSize.width;
+    }
+    bufSize.height = level_ofs.y + level_dy;
+
+    imagePyramid.create(bufSize, CV_8U);
+    if( !mask.empty() )
+        maskPyramid.create(bufSize, CV_8U);
+
+    Mat prevImg = image, prevMask = mask;
+
+    // Pre-compute the scale pyramids
+    for (level = 0; level < nLevels; ++level)
+    {
+        Rect linfo = layerInfo[level];
+        Size sz(linfo.width, linfo.height);
+        Size wholeSize(sz.width + border*2, sz.height + border*2);
+        Rect wholeLinfo = Rect(linfo.x - border, linfo.y - border, wholeSize.width, wholeSize.height);
+        Mat extImg = imagePyramid(wholeLinfo), extMask;
+        Mat currImg = extImg(Rect(border, border, sz.width, sz.height)), currMask;
+
+        if( !mask.empty() )
+        {
+            extMask = maskPyramid(wholeLinfo);
+            currMask = extMask(Rect(border, border, sz.width, sz.height));
+        }
+
+        // Compute the resized image
+        if( level != firstLevel )
+        {
+            resize(prevImg, currImg, sz, 0, 0, INTER_LINEAR_EXACT);
+            if( !mask.empty() )
+            {
+                resize(prevMask, currMask, sz, 0, 0, INTER_LINEAR_EXACT);
+                if( level > firstLevel )
+                    threshold(currMask, currMask, 254, 0, THRESH_TOZERO);
+            }
+
+            copyMakeBorder(currImg, extImg, border, border, border, border,
+                           BORDER_REFLECT_101+BORDER_ISOLATED);
+            if (!mask.empty())
+                copyMakeBorder(currMask, extMask, border, border, border, border,
+                               BORDER_CONSTANT+BORDER_ISOLATED);
+        }
+        else
+        {
+            copyMakeBorder(image, extImg, border, border, border, border,
+                           BORDER_REFLECT_101);
+            if( !mask.empty() )
+                copyMakeBorder(mask, extMask, border, border, border, border,
+                               BORDER_CONSTANT+BORDER_ISOLATED);
+        }
+        if (level > firstLevel)
+        {
+            prevImg = currImg;
+            prevMask = currMask;
+        }
+    }
+
+    if( useOCL )
+        copyVectorToUMat(layerOfs, ulayerInfo);
+
+    if( do_keypoints )
+    {
+        if( useOCL )
+            imagePyramid.copyTo(uimagePyramid);
+        std::cout << "imagePyramid rows: " << imagePyramid.rows << " cols: " << imagePyramid.rows << std::endl;
+        // Get keypoints, those will be far enough from the border that no check will be required for the descriptor
+        computeKeyPoints(imagePyramid, uimagePyramid, maskPyramid,
+                         layerInfo, ulayerInfo, layerScale, keypoints,
+                         nfeatures, scaleFactor, edgeThreshold, patchSize, scoreType, useOCL, fastThreshold);
+    }
+    else
+    {
+        KeyPointsFilter::runByImageBorder(keypoints, image.size(), edgeThreshold);
+
+        if( !sortedByLevel )
+        {
+            std::vector<std::vector<KeyPoint> > allKeypoints(nLevels);
+            nkeypoints = (int)keypoints.size();
+            for( i = 0; i < nkeypoints; i++ )
+            {
+                level = keypoints[i].octave;
+                CV_Assert(0 <= level);
+                allKeypoints[level].push_back(keypoints[i]);
+            }
+            keypoints.clear();
+            for( level = 0; level < nLevels; level++ )
+                std::copy(allKeypoints[level].begin(), allKeypoints[level].end(), std::back_inserter(keypoints));
+        }
+    }
+
+    if( do_descriptors )
+    {
+        int dsize = descriptorSize();
+
+        nkeypoints = (int)keypoints.size();
+        if( nkeypoints == 0 )
+        {
+            _descriptors.release();
+            return;
+        }
+
+        _descriptors.create(nkeypoints, dsize, CV_8U);
+        std::vector<Point> pattern;
+
+        const int npoints = 512;
+        Point patternbuf[npoints];
+        const Point* pattern0 = (const Point*)bit_pattern_31_;
+
+        if( patchSize != 31 )
+        {
+            pattern0 = patternbuf;
+            makeRandomPattern(patchSize, patternbuf, npoints);
+        }
+
+        CV_Assert( wta_k == 2 || wta_k == 3 || wta_k == 4 );
+
+        if( wta_k == 2 )
+            std::copy(pattern0, pattern0 + npoints, std::back_inserter(pattern));
+        else
+        {
+            int ntuples = descriptorSize()*4;
+            initializeOrbPattern(pattern0, pattern, ntuples, wta_k, npoints);
+        }
+
+        for( level = 0; level < nLevels; level++ )
+        {
+            // preprocess the resized image
+            Mat workingMat = imagePyramid(layerInfo[level]);
+
+            //boxFilter(working_mat, working_mat, working_mat.depth(), Size(5,5), Point(-1,-1), true, BORDER_REFLECT_101);
+            GaussianBlur(workingMat, workingMat, Size(7, 7), 2, 2, BORDER_REFLECT_101);
+        }
+
+#ifdef HAVE_OPENCL
+        if( useOCL )
+        {
+            imagePyramid.copyTo(uimagePyramid);
+            std::vector<Vec4i> kptbuf;
+            UMat ukeypoints, upattern;
+            copyVectorToUMat(pattern, upattern);
+            uploadORBKeypoints(keypoints, layerScale, kptbuf, ukeypoints);
+
+            UMat udescriptors = _descriptors.getUMat();
+            useOCL = ocl_computeOrbDescriptors(uimagePyramid, ulayerInfo,
+                                               ukeypoints, udescriptors, upattern,
+                                               nkeypoints, dsize, wta_k);
+            if(useOCL)
+            {
+                CV_IMPL_ADD(CV_IMPL_OCL);
+            }
+        }
+
+        if( !useOCL )
+#endif
+        {
+            Mat descriptors = _descriptors.getMat();
+            computeOrbDescriptors(imagePyramid, layerInfo, layerScale,
+                                  keypoints, descriptors, pattern, dsize, wta_k);
+        }
+    }
+}
+
+void ORB_Impl::detectAndComputeORB( InputArray _image, Mat &imagePyramid, InputArray _mask,
+                                 std::vector<KeyPoint>& keypoints,
+                                 OutputArray _descriptors, bool useProvidedKeypoints )
+{
+    CV_INSTRUMENT_REGION();
+
+    CV_Assert(patchSize >= 2);
+
+    bool do_keypoints = !useProvidedKeypoints;
+    bool do_descriptors = _descriptors.needed();
+
+    if( (!do_keypoints && !do_descriptors) || _image.empty() )
+        return;
+
+    //ROI handling
+    const int HARRIS_BLOCK_SIZE = 9;
+    int halfPatchSize = patchSize / 2;
+    // sqrt(2.0) is for handling patch rotation
+    int descPatchSize = cvCeil(halfPatchSize*sqrt(2.0));
+    int border = std::max(edgeThreshold, std::max(descPatchSize, HARRIS_BLOCK_SIZE/2))+1;
+
+#ifdef HAVE_OPENCL
+    bool useOCL = ocl::isOpenCLActivated() && OCL_FORCE_CHECK(_image.isUMat() || _descriptors.isUMat());
+#else
+    bool useOCL = false;
+#endif
+
+    Mat image = _image.getMat(), mask = _mask.getMat();
+    if( image.type() != CV_8UC1 )
+        cvtColor(_image, image, COLOR_BGR2GRAY);
+
+    int i, level, nLevels = this->nlevels, nkeypoints = (int)keypoints.size();
+    bool sortedByLevel = true;
+
+    if( !do_keypoints )
+    {
+        // if we have pre-computed keypoints, they may use more levels than it is set in parameters
+        // !!!TODO!!! implement more correct method, independent from the used keypoint detector.
+        // Namely, the detector should provide correct size of each keypoint. Based on the keypoint size
+        // and the algorithm used (i.e. BRIEF, running on 31x31 patches) we should compute the approximate
+        // scale-factor that we need to apply. Then we should cluster all the computed scale-factors and
+        // for each cluster compute the corresponding image.
+        //
+        // In short, ultimately the descriptor should
+        // ignore octave parameter and deal only with the keypoint size.
+        nLevels = 0;
+        for( i = 0; i < nkeypoints; i++ )
+        {
+            level = keypoints[i].octave;
+            CV_Assert(level >= 0);
+            if( i > 0 && level < keypoints[i-1].octave )
+                sortedByLevel = false;
+            nLevels = std::max(nLevels, level);
+        }
+        nLevels++;
+    }
+
+    std::vector<Rect> layerInfo(nLevels);
+    std::vector<int> layerOfs(nLevels);
+    std::vector<float> layerScale(nLevels);
+
+    Mat maskPyramid;
     UMat uimagePyramid, ulayerInfo;
 
     float level0_inv_scale = 1.0f / getScale(0, firstLevel, scaleFactor);
