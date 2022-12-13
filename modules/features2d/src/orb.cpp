@@ -705,7 +705,7 @@ public:
     void detectAndCompute( InputArray image, InputArray mask, std::vector<KeyPoint>& keypoints,
                      OutputArray descriptors, bool useProvidedKeypoints=false ) CV_OVERRIDE;
 
-    void detectAndComputeORB( InputArray image, Mat &imagePyramid, InputArray mask,
+    void detectAndComputeORB( InputArray image, Mat &imagePyramid, std::vector<Rect> &layerInfo, InputArray mask,
                               CV_OUT std::vector<KeyPoint>& keypoints,
                               OutputArray descriptors,
                               bool useProvidedKeypoints=false ) CV_OVERRIDE;
@@ -1224,7 +1224,7 @@ void ORB_Impl::detectAndCompute( InputArray _image, InputArray _mask,
     }
 }
 
-void ORB_Impl::detectAndComputeORB( InputArray _image, Mat &imagePyramid, InputArray _mask,
+void ORB_Impl::detectAndComputeORB( InputArray _image, Mat &imagePyramid, std::vector<Rect> &layerInfo, InputArray _mask,
                                  std::vector<KeyPoint>& keypoints,
                                  OutputArray _descriptors, bool useProvidedKeypoints )
 {
@@ -1281,7 +1281,7 @@ void ORB_Impl::detectAndComputeORB( InputArray _image, Mat &imagePyramid, InputA
         nLevels++;
     }
 
-    std::vector<Rect> layerInfo(nLevels);
+    // std::vector<Rect> layerInfo(nLevels);
     std::vector<int> layerOfs(nLevels);
     std::vector<float> layerScale(nLevels);
 

@@ -457,7 +457,7 @@ public:
     CV_WRAP virtual int getFastThreshold() const = 0;
     CV_WRAP virtual String getDefaultName() const CV_OVERRIDE;
     
-    virtual void detectAndComputeORB( InputArray image, Mat &imagePyramid, InputArray mask,
+    virtual void detectAndComputeORB( InputArray image, Mat &imagePyramid, std::vector<Rect> &layerInfo, InputArray mask,
                               CV_OUT std::vector<KeyPoint>& keypoints,
                               OutputArray descriptors,
                               bool useProvidedKeypoints=false ) = 0;
